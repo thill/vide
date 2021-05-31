@@ -141,3 +141,10 @@ COMMAND='my_awesome_ide -d "${DIRECTORY}"'
 DIRECTORY='${HOME}/git/awesome_project'
 ```
 First, vide loads defaults. Then it loads properties. Then it evaluates the `COMMAND` and executes it.
+
+
+## Portability
+After a project is created, it does not depend on its template to run.
+Rather, templates are used to create fully portable vive project configurations.
+When migrating to another system, you may migrate vive projects simply by copying them from `~/.vive/projects/` and installing vive.
+
