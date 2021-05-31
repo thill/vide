@@ -1,0 +1,238 @@
+#!/bin/bash
+set -e
+
+VIDE_HOME="${VIDE_HOME:-${HOME}/.vide}"
+
+vide_directories() {
+  echo "/etc/vide"
+  echo "/usr/local/etc/vide"
+  echo "${VIDE_HOME}"
+}
+
+_get_subdir_names_in() {
+  local DIRECTORY="${1}"
+  for SUBDIR in "${DIRECTORY}"/*; do
+    if [ -d "${SUBDIR}" ]; then
+      echo "$(basename ${SUBDIR})"
+    fi
+  done
+}
+
+_get_vide_subnames() {
+  local VIDE_SUBDIR="${1}"
+  local -A RESULT_MAP
+  for VIDEDIR in $(vide_directories); do
+    for NAME in $(_get_subdir_names_in "${VIDEDIR}/${VIDE_SUBDIR}"); do
+      RESULT_MAP["${NAME}"]="${NAME}"
+    done
+  done
+  for NAME in "${!RESULT_MAP[@]}"
+  do
+    echo "${NAME}"
+  done |
+  sort
+}
+
+_get_vide_path() {
+  local VIDE_SUBPATH="${1}"
+  local RESULT=""
+  for VIDE_DIR in $(vide_directories); do
+    local CHECK_DIR="${VIDE_DIR}/${VIDE_SUBPATH}"
+    if [ -d "${CHECK_DIR}" ]; then
+      RESULT="${CHECK_DIR}"
+    fi
+  done
+  echo "${RESULT}"
+}
+
+_get_vide_project_names() {
+  _get_vide_subnames "projects"
+}
+
+_get_vide_template_names() {
+  _get_vide_subnames "templates"
+}
+
+_get_vide_project_directory() {
+  local PROJECT_NAME="${1}"
+  _get_vide_path "projects/${PROJECT_NAME}"
+}
+
+_get_vide_template_directory() {
+  local TEMPLATE_NAME="${1}"
+  _get_vide_path "templates/${TEMPLATE_NAME}"
+}
+
+_vide_read_project_properties() {
+  local VIDE_PROJECT_NAME="${1}"
+  local VIDE_PROJECT_DIR="$(_get_vide_project_directory "${VIDE_PROJECT_NAME}")"
+  while read LINE; do
+    local KEY=$(echo "${LINE}" | cut -d "=" -f1)
+    local VALUE=$(echo "${LINE}" | cut -d "=" -f2-)
+    if [ -n "${KEY}" ]; then
+      echo "local ${KEY}='${VALUE}'"
+    fi
+  done < "${VIDE_PROJECT_DIR}/defaults"
+  while read LINE; do
+    local KEY=$(echo "${LINE}" | cut -d "=" -f1)
+    local VALUE=$(echo "${LINE}" | cut -d "=" -f2-)
+    if [ -n "${KEY}" ]; then
+      echo "local ${KEY}='${VALUE}'"
+    fi
+  done < "${VIDE_PROJECT_DIR}/properties"
+}
+
+_vide_eval_command() {
+  local COMMAND="${1}"
+  local LAST_COMMAND=""
+  while [ "${COMMAND}" != "${LAST_COMMAND}" ]; do
+    LAST_COMMAND="${COMMAND}"
+    COMMAND=$(eval "echo \"${COMMAND}\"")
+  done
+  echo "${COMMAND}"
+}
+
+vide_usage() {
+  echo "Usage:"
+  echo "       vide help"
+  echo "       vide list"
+  echo "       vide details <NAME>"
+  echo "       vide open <NAME>"
+  echo "       vide delete <NAME>"
+  for TEMPLATE_NAME in $(_get_vide_template_names); do
+    local TEMPLATE_DIR=$(_get_vide_template_directory "${TEMPLATE_NAME}")
+    local PROPS=""
+    while read LINE; do
+      local KEY=$(echo "${LINE}" | cut -d "=" -f1)
+      local VALUE=$(echo "${LINE}" | cut -d "=" -f2-)
+      PROPS+=" ${KEY}='${VALUE}'"
+    done < "${TEMPLATE_DIR}/defaults"
+    echo "       vide create $(basename ${TEMPLATE_DIR}) <NAME>${PROPS}"
+  done
+}
+
+vide_exit_usage() {
+  vide_usage
+  exit 1
+}
+
+
+vide_list() {
+  local RESULTS=""
+  for VIDE_PROJECT_NAME in $(_get_vide_project_names); do
+    local VIDE_PROJECT_DIR="$(_get_vide_project_directory "${VIDE_PROJECT_NAME}")"
+    eval $(_vide_read_project_properties "${VIDE_PROJECT_NAME}")
+    local EVALUATED_COMMAND=$(_vide_eval_command "${COMMAND}")
+    RESULTS+=$(echo "$(basename ${VIDE_PROJECT_DIR})|->|${EVALUATED_COMMAND}")
+    RESULTS+='\n'
+  done
+  echo -e ${RESULTS} | column -t -s '|'
+}
+
+vide_details() {
+  if [ $# -lt 1 ]; then
+    vide_exit_usage
+  fi
+  local VIDE_PROJECT_NAME="${1}"
+  local VIDE_PROJECT_DIR="$(_get_vide_project_directory "${VIDE_PROJECT_NAME}")"
+  if [ ! -d "${VIDE_PROJECT_DIR}" ]; then
+    echo "Error: vide project '${VIDE_PROJECT_DIR}' not found"
+    exit 2
+  fi
+  echo "name: ${VIDE_PROJECT_NAME}"
+  echo "directory: ${VIDE_PROJECT_DIR=}"
+  echo "--- defaults ---"
+  cat "${VIDE_PROJECT_DIR}/defaults"
+  echo "--- properties ---"
+  cat "${VIDE_PROJECT_DIR}/properties"
+}
+
+vide_create() {
+  if [ $# -lt 2 ]; then
+    vide_exit_usage
+  fi
+  local VIDE_TEMPLATE_NAME="${1}"; shift
+  local VIDE_PROJECT_NAME="${1}"; shift
+  local VIDE_TEMPLATE_DIR="$(_get_vide_template_directory "${VIDE_TEMPLATE_NAME}")"
+  local VIDE_PROJECT_DIR="${VIDE_HOME}/projects/${VIDE_PROJECT_NAME}"
+  if [[ ! "${VIDE_PROJECT_NAME}" =~ ^[0-9a-zA-Z_-]+$ ]]; then
+    echo "Error: vide projects names may only contain alphanumerics, underscores, and hypens"
+    exit 2
+  fi
+  echo "Creating vide project '${VIDE_PROJECT_NAME}' in '${VIDE_PROJECT_DIR}'"
+  if [ -d "${VIDE_PROJECT_DIR}" ]; then
+    echo "Error: '${VIDE_PROJECT_DIR}' already exists"
+    exit 2
+  fi
+  mkdir -p "${VIDE_HOME}/projects"
+  cp -r "${VIDE_TEMPLATE_DIR}" "${VIDE_PROJECT_DIR}"
+  for PROPERTY in "$@"; do
+    local KEY=$(echo "${PROPERTY}" | cut -d "=" -f1)
+    local VALUE=$(echo "${PROPERTY}" | cut -d "=" -f2-)
+    echo "${KEY}=${VALUE}" >> "${VIDE_PROJECT_DIR}/properties"
+  done
+}
+
+vide_delete() {
+  if [ $# -lt 1 ]; then
+    vide_exit_usage
+  fi
+  local VIDE_PROJECT_NAME="${1}"
+  local VIDE_PROJECT_DIR="$(_get_vide_project_directory "${VIDE_PROJECT_NAME}")"
+  if [ -z "${VIDE_PROJECT_DIR}" ]; then
+    echo "Error: vide project '${VIDE_PROJECT_NAME}' not found"
+    exit 2
+  fi
+  echo "Deleting vide project '${VIDE_PROJECT_NAME}' in '${VIDE_PROJECT_DIR}'"
+  if [ ! -d "${VIDE_PROJECT_DIR}" ]; then
+    echo "Error: directory '${VIDE_PROJECT_DIR}' does not exist"
+    exit 2
+  fi
+  rm -r "${VIDE_PROJECT_DIR}"
+}
+
+vide_open() {
+  if [ $# -lt 1 ]; then
+    vide_exit_usage
+  fi
+  local VIDE_PROJECT_NAME="${1}"
+  local VIDE_PROJECT_DIR="$(_get_vide_project_directory "${VIDE_PROJECT_NAME}")"
+  if [ -z "${VIDE_PROJECT_DIR}" ]; then
+    echo "Error: vide project '${VIDE_PROJECT_NAME}' not found"
+    exit 2
+  fi
+  echo "Opening vide project '${VIDE_PROJECT_NAME}' in '${VIDE_PROJECT_DIR}"
+  if [ ! -d "${VIDE_PROJECT_DIR}" ]; then
+    echo "Error: directory '${VIDE_PROJECT_DIR}' does not exist"
+    exit 2
+  fi
+  eval $(_vide_read_project_properties "${VIDE_PROJECT_NAME}")
+  EVALUATED_COMMAND=$(_vide_eval_command "${COMMAND}")
+  echo "Executing: ${EVALUATED_COMMAND}"
+  cd "${VIDE_PROJECT_DIR}"
+  eval "${EVALUATED_COMMAND}"
+}
+
+vide_main() {
+  if [ $# -lt 1 ]; then
+    vide_exit_usage
+  fi
+  local ACTION="${1}"; shift
+  if [ "${ACTION}" == "help" ]; then
+    vide_usage
+  elif [ "${ACTION}" == "list" ]; then
+    vide_list
+  elif [ "${ACTION}" == "details" ]; then
+    vide_details "$@"
+  elif [ "${ACTION}" == "create" ]; then
+    vide_create "$@"
+  elif [ "${ACTION}" == "delete" ]; then
+    vide_delete "$@"
+  elif [ "${ACTION}" == "open" ]; then
+    vide_open "$@"
+  else
+    vide_exit_usage
+  fi
+}
+
+vide_main "$@"
